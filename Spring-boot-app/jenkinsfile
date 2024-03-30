@@ -1,0 +1,68 @@
+pipeline{
+    agent{
+        docker{
+            image 'sudhakara1998/maven-argoCd-docker-agent:v1'
+            args '--user root -v /var/run/docker.sock:/var/run/docker.sock' // mount Docker socket to acces the host's Docker daemon
+        }
+    }
+    stages {
+        stage('checkout'){
+            steps{
+                sh 'echo passed'
+                //git branch: 'main', url: 'https://github.com/sanjusabbana/deploy-spring-boot-app-on-eks-argocd.git'               
+            }
+        }
+        stage('build and test'){
+            steps {
+                sh 'ls -ltr'
+                // build the artifact and create the Jar file
+                sh 'cd deploy-spring-boot-app-on-eks-argocd-1/Spring-boot-app && mvn clean package'
+            }
+        }
+        stage(static code analysis){
+            enviornment{
+                SONAR_URL = "HGG"
+            }
+            steps{
+                withcridentials([string(credentialsId: 'sonarqube', variable: 'TOKEN')]){
+                    sh 'cd deploy-spring-boot-app-on-eks-argocd-1/Spring-boot-app && mvn sonar:sonar -Dsonar.login=$TOKEN' 
+                }
+            }
+        }
+        stage('build and Push Docker image'){
+            enviornment{
+                DOCKER_IMAGE = "sudhakara1998/ultimate-cicd:${BUILD-NUMBER}"
+                // DOCKERFILR_LOCATION = "deploy-spring-boot-app-on-eks-argocd-1/Spring-boot-app/Dockerfile"
+                RIGISTRY_CREDENTIALS = credentials('docker-cred')
+            }
+            steps{
+              script{  
+                sh 'cd deploy-spring-boot-app-on-eks-argocd/Spring-boot-app && docker build -t ${DOCKER_IMAGE} .'
+                def dockerImage = docker.image("${DOCKER_IMAGE}")
+                docker.withRegistary('https://index.docker.io/v1/', "docker-cred"){
+                    dockerImage.push()
+                }
+            }
+        }
+        stage('update Deployment File'){
+            enviornment{
+                GIT_REPO_NAME = "deploy-spring-boot-app-on-eks-argocd"
+                GIT_USER_NAME = "sanjusabbana"
+                }
+            }
+            steps{
+                withcridentials([string(credentialsId: 'github', variable: 'git token' )]){
+                sh '''
+                    git config user.email "sabbanasudhakar@gmail.com"
+                    git config user.name "sanjusabbana"
+                    BUILD_NUMBER=${BUILD_NUMBER}
+                    sed -i "s/replaceimageTag/${BUILD_NUMBER}/g" deploy-spring-boot-app-on-eks-argocd/Spring-boot-manifestes/deployment.yaml
+                    git add deploy-spring-boot-app-on-eks-argocd/Spring-boot-manifestes/deployment.yaml
+                    git commit -m "update deployment image to version ${BUILD_NUMBER}"
+                    git pusu http://${git-token}@github.com/${username}/${gutreponame} HEAD:main                    
+                 '''
+                }
+            } 
+       }
+    } 
+}
